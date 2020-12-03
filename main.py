@@ -23,6 +23,27 @@ from tianshou.utils.net.common import Net
 from tianshou.utils.net.continuous import ActorProb, Critic
 from MOPOPolicy import MOPOPolicy
 
+from bnn import EnsembledBNN
+from fakenv import FakeEnv
+
+import numpy as np
+
+class StaticFns:
+
+    @staticmethod
+    def termination_fn(obs, act, next_obs):
+        assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+
+        done = np.array([False]).repeat(len(obs))
+        done = done[:,None]
+        return done
+
+    @staticmethod
+    def recompute_reward_fn(obs, act, next_obs, rew):
+        assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+
+        new_rew = -(rew + 0.1 * np.sum(np.square(act))) - 0.1 * np.sum(np.square(act))
+        return new_rew
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -42,7 +63,6 @@ def get_args():
     parser.add_argument('--step-per-epoch', type=int, default=2400)
     parser.add_argument('--collect-per-step', type=int, default=5)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--layer-num', type=int, default=1)
     parser.add_argument('--training-num', type=int, default=16)
     parser.add_argument('--test-num', type=int, default=100)
     parser.add_argument('--logdir', type=str, default='log')
@@ -51,6 +71,10 @@ def get_args():
     parser.add_argument('--device', type=str,
                         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--resume-path', type=str, default=None)
+
+    parser.add_argument('--layer-num', type=int, default=4)
+    parser.add_argument('--hidden-layer-size', type=int, default=200)
+
     return parser.parse_args()
 
 
@@ -61,14 +85,26 @@ def main(args=get_args()):
     args.max_action = env.action_space.high[0]
     print('Running on ' + args.device)
 
+    ################################# Buffer #################################
+    # Buffer for offline data
+    # load data, most d4rl dataset has 1M SARSA pair, how many do we need?
+
+    MOPO_buffer = ReplayBuffer(args.buffer_size) #TODO: Load offline data
+
+    # Buffer for learned env model
+    MOPO_buffer = ReplayBuffer(args.buffer_size)
+
+    ################################# Policy #################################
+
+
+
     ################################# Environment Model #################################
-    # TODO
-    # Construct Environment Model
+    env = gym.make(args.task)
+    # Load pre-trained BNN model
+    bnns = EnsembledBNN().cuda()
+    bnns.load_weight('./mopo/BNN_0.mat')
 
-    # Train Environment Model
-
-    # Load Environment Model
-
+    static_fns = StaticFns()
 
 
     ################################# Create Environment #################################
@@ -77,8 +113,8 @@ def main(args=get_args()):
     # train_envs = gym.make(args.task)
 
     # For MOPO, train_env should be the fake env learned from offline data.
-    train_envs = DummyVectorEnv(
-        [lambda: gym.make(args.task) for _ in range(args.training_num)])
+    # train_envs = DummyVectorEnv(
+    #     [lambda: fake_env for _ in range(args.training_num)])
 
     # For MOPO, test_env should be the real env.
     # test_envs = gym.make(args.task)
@@ -88,20 +124,9 @@ def main(args=get_args()):
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    train_envs.seed(args.seed)
+    # train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-
-    ################################# Buffer #################################
-    # Buffer for offline data
-    # load data, most d4rl dataset has 1M SARSA pair, how many do we need?
-    
-    MOPO_buffer = ReplayBuffer(args.buffer_size) #TODO: Load offline data
-
-    # Buffer for learned env model
-    MOPO_buffer = ReplayBuffer(args.buffer_size)
-
-    ################################# Policy #################################
 
     # Actor Network
     net = Net(args.layer_num, args.state_shape, device=args.device)
@@ -144,11 +169,23 @@ def main(args=get_args()):
 
 
     ################################# Collector #################################
+    tmp_train_envs = DummyVectorEnv(
+        [lambda: gym.make(args.task)  for _ in range(args.training_num)])
+
     train_collector = Collector(
-        policy, train_envs, MOPO_buffer)
+        policy, tmp_train_envs, MOPO_buffer)
 
     test_collector = Collector(policy, test_envs)
 
+    train_collector.collect(n_step=10000, random=True)
+
+    fake_env = FakeEnv(bnns, MOPO_buffer, static_fns)
+
+    train_envs = DummyVectorEnv(
+        [lambda: fake_env for _ in range(args.training_num)])
+    
+    train_collector = Collector(
+        policy, train_envs, MOPO_buffer)
 
     ################################# Log #################################
 

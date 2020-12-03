@@ -2,16 +2,26 @@ import numpy as np
 ##import tensorflow as tf
 import pdb
 import torch
-class FakeEnv:
-    def __init__(self, model, config,
+import gym
+from gym.envs.mujoco.half_cheetah_v3 import HalfCheetahEnv
+
+class FakeEnv(HalfCheetahEnv):
+    def __init__(self, bnns, env_buffer, config,
                 penalty_coeff=0.,
                 penalty_learned_var=False,
                 penalty_learned_var_random=False):
-        self.model = model
+        self.bnns = bnns
         self.config = config
         self.penalty_coeff = penalty_coeff
         self.penalty_learned_var = penalty_learned_var
         self.penalty_learned_var_random = penalty_learned_var_random
+        self.env_buffer = env_buffer
+        self.reset()
+        super().__init__()
+
+    def reset(self):
+        batch, _ = self.env_buffer.sample(1)
+        self.obs = batch.obs[0]
 
     '''
         x : [ batch_size, obs_dim + 1 ]
@@ -35,7 +45,9 @@ class FakeEnv:
 
         return log_prob, stds
 
-    def step(self, obs, act, deterministic=False):
+    def step(self, act, deterministic=True):
+        obs = self.obs
+
         assert len(obs.shape) == len(act.shape)
         if len(obs.shape) == 1:
             obs = obs[None]
@@ -45,7 +57,7 @@ class FakeEnv:
             return_single = False
 
         inputs = np.concatenate((obs, act), axis=-1)
-        ensemble_model_means, ensemble_model_vars = self.model.predict(inputs, factored=True)
+        ensemble_model_means, ensemble_model_vars = self.bnns.predict(inputs, factored=True)
         ensemble_model_means[:,:,1:] += obs
         ensemble_model_stds = np.sqrt(ensemble_model_vars)
 
@@ -57,7 +69,7 @@ class FakeEnv:
         if not deterministic:
             #### choose one model from ensemble
             num_models, batch_size, _ = ensemble_model_means.shape
-            model_inds = self.model.random_inds(batch_size)
+            model_inds = self.bnns.random_inds(batch_size)
             batch_inds = np.arange(0, batch_size)
             samples = ensemble_samples[model_inds, batch_inds]
             model_means = ensemble_model_means[model_inds, batch_inds]
@@ -85,7 +97,7 @@ class FakeEnv:
                 normalize_diffs = False
                 if normalize_diffs:
                     obs_dim = next_obs.shape[1]
-                    obs_sigma = self.model.scaler.cached_sigma[0,:obs_dim]
+                    obs_sigma = self.bnns.scaler.cached_sigma[0,:obs_dim]
                     diffs = diffs / obs_sigma
                 dists = np.linalg.norm(diffs, axis=2)   # distance in obs space
                 penalty = np.max(dists, axis=0)         # max distances over models
@@ -109,6 +121,7 @@ class FakeEnv:
             penalized_rewards = penalized_rewards[0]
             terminals = terminals[0]
 
+        self.obs = next_obs
         info = {'mean': return_means, 'std': return_stds, 'log_prob': log_prob, 'dev': dev,
                 'unpenalized_rewards': unpenalized_rewards, 'penalty': penalty, 'penalized_rewards': penalized_rewards}
         return next_obs, penalized_rewards, terminals, info
@@ -121,7 +134,7 @@ class FakeEnv:
         
         #inputs = tf.concat([obs_ph, act_ph], axis=1)
         # inputs = np.concatenate((obs, act), axis=-1)
-        ensemble_model_means, ensemble_model_vars = self.model.create_prediction_tensors(inputs, factored=True)
+        ensemble_model_means, ensemble_model_vars = self.bnns.create_prediction_tensors(inputs, factored=True)
         # ensemble_model_means, ensemble_model_vars = self.model.predict(inputs, factored=True)
         ensemble_model_means = torch.cat([ensemble_model_means[:,:,0:1], ensemble_model_means[:,:,1:] + obs_ph[None]], axis=-1)
         #ensemble_model_means = tf.concat([ensemble_model_means[:,:,0:1], ensemble_model_means[:,:,1:] + obs_ph[None]], axis=-1)
