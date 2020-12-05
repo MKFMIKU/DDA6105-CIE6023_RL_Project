@@ -60,7 +60,7 @@ class EnsembledBNN(nn.Module):
 
 
     def predict(self, inputs, factored=True):
-        inputs = torch.from_numpy(inputs).cuda()
+        inputs = torch.from_numpy(inputs).double().cuda()
         mean_outputs = []
         logvar_outputs = []
 
