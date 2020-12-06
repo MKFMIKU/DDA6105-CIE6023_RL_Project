@@ -17,7 +17,7 @@ class BNN(nn.Module):
         self.two_var = nn.Linear(200, 18, bias=True)
 
     def silu(self, x):
-        return x * F.sigmoid(x)
+        return x * torch.sigmoid(x)
     
     def forward(self, x):
         x = self.silu(self.fc1(x))
@@ -25,7 +25,7 @@ class BNN(nn.Module):
         x = self.silu(self.fc3(x))
         var = self.two_var(x)
         x = self.silu(self.fc4(x))
-        x = self.var(x)
+        x = self.silu(self.var(x))
         return x, var
 
 
@@ -71,4 +71,11 @@ class EnsembledBNN(nn.Module):
                 logvar_outputs.append(logvar)
         mean = torch.stack(mean_outputs, 0)
         logvar = torch.stack(logvar_outputs, 0)
-        return mean.cpu().numpy(), logvar.cpu().numpy()
+
+        max_logvar = torch.ones_like(logvar, device=logvar.device) / 2.
+        min_logvar = -torch.ones_like(logvar, device=logvar.device) * 10.
+
+        logvar = max_logvar - nn.functional.softplus(max_logvar - logvar)
+        logvar = min_logvar + nn.functional.softplus(logvar - min_logvar)
+
+        return mean.cpu().numpy(), torch.exp(logvar).cpu().numpy()

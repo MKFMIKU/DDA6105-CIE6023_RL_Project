@@ -22,6 +22,7 @@ class FakeEnv(HalfCheetahEnv):
     def reset(self):
         batch, _ = self.env_buffer.sample(1)
         self.obs = batch.obs[0]
+        return self.obs
 
     '''
         x : [ batch_size, obs_dim + 1 ]
@@ -32,6 +33,7 @@ class FakeEnv(HalfCheetahEnv):
 
         k = x.shape[-1]
 
+
         ## [ num_networks, batch_size ]
         log_prob = -1/2 * (k * np.log(2*np.pi) + np.log(variances).sum(-1) + (np.power(x-means, 2)/variances).sum(-1))
         
@@ -39,7 +41,7 @@ class FakeEnv(HalfCheetahEnv):
         prob = np.exp(log_prob).sum(0)
 
         ## [ batch_size ]
-        log_prob = np.log(prob)
+        log_prob = np.log(prob + 1e-6)
 
         stds = np.std(means,0).mean(-1)
 
@@ -59,7 +61,7 @@ class FakeEnv(HalfCheetahEnv):
         inputs = np.concatenate((obs, act), axis=-1)
         ensemble_model_means, ensemble_model_vars = self.bnns.predict(inputs, factored=True)
         ensemble_model_means[:,:,1:] += obs
-        ensemble_model_stds = np.sqrt(ensemble_model_vars)
+        ensemble_model_stds = np.sqrt(np.exp(ensemble_model_vars))
 
         if deterministic:
             ensemble_samples = ensemble_model_means
